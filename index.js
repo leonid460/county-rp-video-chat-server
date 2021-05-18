@@ -7,7 +7,6 @@ import mysql from 'mysql';
 import dotEnv from 'dotenv';
 import { DbQueriesContainer } from './dbQueries.js';
 import { encoderFactory, validatorFactory } from './crypto.js';
-import { encode } from 'querystring';
 
 dotEnv.config();
 
