@@ -6,6 +6,8 @@ import { Server as SocketIoServer} from 'socket.io';
 import mysql from 'mysql';
 import dotEnv from 'dotenv';
 import { DbQueriesContainer } from './dbQueries.js';
+import { encoderFactory, validatorFactory } from './crypto.js';
+import { encode } from 'querystring';
 
 dotEnv.config();
 
@@ -14,6 +16,9 @@ const usersMap = new Map();
 
 const app = express();
 const server = http.createServer(app);
+
+const encoder = encoderFactory();
+const validate = validatorFactory();
 
 const mySqlConfig = {
 	host: process.env.DB_URL,
@@ -72,7 +77,7 @@ app.post('/login', async (req, res) => {
 			});
 		}
 
-		if (data.password !== password) {
+		if (validate(password, data.password)) {
 			return res.status(401).send({
 				message: 'Invalid Password'
 			});
@@ -108,7 +113,7 @@ app.post('/register', async (req, res) => {
 			});
 		}
 
-		await queriesContainer.addUser(username, password);
+		await queriesContainer.addUser(username, encoder(password));
 
 		return res.status(200).send({
 			username: username,
