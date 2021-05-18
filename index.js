@@ -5,12 +5,12 @@ import cors from 'cors';
 import { Server as SocketIoServer} from 'socket.io';
 import mysql from 'mysql';
 import dotEnv from 'dotenv';
+import { DbQueriesContainer } from './dbQueries.js';
 
 dotEnv.config();
 
 const PORT = process.env.PORT || 5000;
 const usersMap = new Map();
-const usersMapForAuth = new Map();
 
 const app = express();
 const server = http.createServer(app);
@@ -24,10 +24,21 @@ const mySqlConfig = {
 	charset: 'UTF8',
 };
 
-console.log(mySqlConfig);
-
 const connection = mysql.createConnection(mySqlConfig);
 connection.connect();
+const queriesContainer = new DbQueriesContainer(connection);
+
+connection.on('error', (error) => {
+	if (error.code === 'PROTOCOL_CONNECTION_LOST') {
+		return connection.connect();
+	}
+
+	const timer = setInterval(() => {
+		return connection.connect(() => {
+			clearInterval(timer);
+		});
+	}, 5000)
+})
 
 const io = new SocketIoServer(server, {
 	cors: {
@@ -43,7 +54,7 @@ app.get('/', (req, res) => {
 	res.send('Running');
 });
 
-app.post('/login', (req, res) => {
+app.post('/login', async (req, res) => {
 	if (!req.body) {
 		return res.status(400).send({
 			message: 'Bad request'
@@ -52,53 +63,87 @@ app.post('/login', (req, res) => {
 
 	const { username, password } = req.body;
 
-	if (!usersMapForAuth.has(username)) {
-		return res.status(404).send({
-			message: 'Not found'
+	try {
+		const data = await queriesContainer.getUser(username);
+
+		if (!data) {
+			return res.status(404).send({
+				message: 'Not found'
+			});
+		}
+
+		if (data.password !== password) {
+			return res.status(401).send({
+				message: 'Invalid Password'
+			});
+		}
+
+		return res.status(200).send({
+			username: username,
+		});
+	} catch (err) {
+		console.log(err);
+
+		return res.status(500).send({
+			message: 'Internal error'
 		});
 	}
-
-	if (usersMapForAuth.get(username) !== password) {
-		return res.status(401).send({
-			message: 'Invalid Password'
-		});
-	}
-
-	return res.status(200).send({
-		username: username,
-	});
 });
 
-app.post('/register', (req, res) => {
-	console.log('REGISTRATION');
-	const { username, password } = req.body;
-
-	if (usersMapForAuth.has(username)) {
-		return res.status(409).send({
-			message: `User ${username} already exists`
+app.post('/register', async (req, res) => {
+	if (!req.body) {
+		return res.status(400).send({
+			message: 'Bad request'
 		});
 	}
 
-	usersMapForAuth.set(username, password);
+	const { username, password } = req.body;
 
-	console.log(usersMapForAuth);
+	try {
+		const user = await queriesContainer.getUser(username);
 
-	res.status(200).send({
-		username: username,
-	});
+		if (user) {
+			return res.status(409).send({
+				message: `User ${username} already exists`
+			});
+		}
+
+		await queriesContainer.addUser(username, password);
+
+		return res.status(200).send({
+			username: username,
+		});
+	} catch (error) {
+		console.log(error);
+
+		return res.status(500).send({
+			message: 'Internal error'
+		});
+	}
 })
 
 io.on("connection", (socket) => {
+	let username;
+
 	socket.on('setUsername', (data) => {
 		console.log(`${data.username} is connected`);
+		username = data.username;
 
 		usersMap.set(data.username, socket.id);
 
-		console.log(usersMap)
+		console.log(usersMap);
+
+		socket.emit('userConnect', { currentUsers: Array.from(usersMap.keys()) });
+		socket.broadcast.emit('userConnect', { currentUsers: Array.from(usersMap.keys()) });
 	})
 
-	socket.on("disconnect", () => {
-		socket.broadcast.emit("callEnded")
+	socket.on('disconnect', () => {
+		console.log(`disconnect of ${username}`);
+
+		usersMap.delete(username);
+		console.log(usersMap);
+
+		socket.broadcast.emit('userDisconnect', { currentUsers: Array.from(usersMap.keys()) });
 	});
 
 	socket.on("callUser", ({ userToCall, signalData, callerUsername }) => {
