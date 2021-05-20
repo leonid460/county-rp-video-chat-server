@@ -17,7 +17,7 @@ const app = express();
 const server = http.createServer(app);
 
 const encoder = encoderFactory();
-const validate = validatorFactory();
+const validate = validatorFactory(encoder);
 
 const mySqlConfig = {
 	host: process.env.DB_URL,
@@ -28,17 +28,19 @@ const mySqlConfig = {
 	charset: 'UTF8',
 };
 
-const connection = mysql.createConnection(mySqlConfig);
-connection.connect();
-const queriesContainer = new DbQueriesContainer(connection);
+const pool = mysql.createPool(mySqlConfig);;
 
-connection.on('error', (error) => {
+const queriesContainer = new DbQueriesContainer(pool);
+
+pool.on('error', (error) => {
+	console.log(error);
+
 	if (error.code === 'PROTOCOL_CONNECTION_LOST') {
-		return connection.connect();
+		return pool.connect();
 	}
 
 	const timer = setInterval(() => {
-		return connection.connect(() => {
+		return pool.connect(() => {
 			clearInterval(timer);
 		});
 	}, 5000)
@@ -76,7 +78,7 @@ app.post('/login', async (req, res) => {
 			});
 		}
 
-		if (validate(password, data.password)) {
+		if (!validate(password, data.password)) {
 			return res.status(401).send({
 				message: 'Invalid Password'
 			});
@@ -112,7 +114,9 @@ app.post('/register', async (req, res) => {
 			});
 		}
 
-		await queriesContainer.addUser(username, encoder(password));
+		const hashedPassword = encoder(password);
+
+		await queriesContainer.addUser(username, hashedPassword);
 
 		return res.status(200).send({
 			username: username,
